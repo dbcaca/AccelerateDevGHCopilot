@@ -4,6 +4,7 @@ from application_core.interfaces.ipatron_repository import IPatronRepository
 from application_core.interfaces.iloan_repository import ILoanRepository
 from application_core.interfaces.iloan_service import ILoanService
 from application_core.interfaces.ipatron_service import IPatronService
+from infrastructure.json_data import JsonData
 
 class ConsoleApp:
     def __init__(
@@ -11,7 +12,8 @@ class ConsoleApp:
         loan_service: ILoanService,
         patron_service: IPatronService,
         patron_repository: IPatronRepository,
-        loan_repository: ILoanRepository
+        loan_repository: ILoanRepository,
+        json_data: JsonData
     ):
         self._current_state: ConsoleState = ConsoleState.PATRON_SEARCH
         self.matching_patrons = []
@@ -21,6 +23,7 @@ class ConsoleApp:
         self._loan_repository = loan_repository
         self._loan_service = loan_service
         self._patron_service = patron_service
+        self._json_data = json_data
 
     def write_input_options(self, options):
         print("Input Options:")
@@ -32,6 +35,8 @@ class ConsoleApp:
             print(' - "m" to extend patron\'s membership')
         if options & CommonActions.SEARCH_PATRONS:
             print(' - "s" for new search')
+        if options & CommonActions.SEARCH_BOOKS:
+            print(' - "b" to check for book availability')
         if options & CommonActions.QUIT:
             print(' - "q" to quit')
         if options & CommonActions.SELECT:
@@ -107,6 +112,7 @@ class ConsoleApp:
                 | CommonActions.SEARCH_PATRONS
                 | CommonActions.QUIT
                 | CommonActions.SELECT
+                | CommonActions.SEARCH_BOOKS
             )
             selection = self._get_patron_details_input(options)
             return self._handle_patron_details_selection(selection, patron, valid_loans)
@@ -115,6 +121,7 @@ class ConsoleApp:
             options = (
                 CommonActions.SEARCH_PATRONS
                 | CommonActions.QUIT
+                | CommonActions.SEARCH_BOOKS
             )
             selection = self._get_patron_details_input(options)
             return self._handle_no_loans_selection(selection)
@@ -146,6 +153,8 @@ class ConsoleApp:
             print(status)
             self.selected_patron_details = self._patron_repository.get_patron(patron.id)
             return ConsoleState.PATRON_DETAILS
+        elif selection == 'b':
+            return self.search_books()
         elif selection.isdigit():
             idx = int(selection)
             if 1 <= idx <= len(valid_loans):
@@ -154,7 +163,7 @@ class ConsoleApp:
             print("Invalid selection. Please enter a number shown in the list above.")
             return ConsoleState.PATRON_DETAILS
         else:
-            print("Invalid input. Please enter a number, 'm', 's', or 'q'.")
+            print("Invalid input. Please enter a number, 'm', 'b', 's', or 'q'.")
             return ConsoleState.PATRON_DETAILS
 
     def _handle_no_loans_selection(self, selection):
@@ -162,9 +171,71 @@ class ConsoleApp:
             return ConsoleState.QUIT
         elif selection == 's':
             return ConsoleState.PATRON_SEARCH
+        elif selection == 'b':
+            return self.search_books()
         else:
-            print("Invalid input.")
+            print("Invalid input. Please enter 'b', 's', or 'q'.")
             return ConsoleState.PATRON_DETAILS
+
+    def search_books(self) -> ConsoleState:
+        book_title = ""
+        while not book_title:
+            book_title = input("Enter a book title to search for").strip()
+            if not book_title:
+                print("No book title provided. Please try again.")
+
+        book = next(
+            (book for book in self._json_data.books
+             if book.title.casefold() == book_title.casefold()),
+            None
+        )
+        if book is None:
+            print(f"No book found with the title \"{book_title}\".")
+            return ConsoleState.PATRON_DETAILS
+
+        book_items = [
+            item for item in self._json_data.book_items if item.book_id == book.id
+        ]
+        if not book_items:
+            print(f"No book item found for the title \"{book.title}\".")
+            return ConsoleState.PATRON_DETAILS
+
+        available_book_items = [
+            item for item in book_items
+            if not any(
+                loan.book_item_id == item.id and loan.return_date is None
+                for loan in self._json_data.loans
+            )
+        ]
+        if available_book_items:
+            print(f"Book '{book.title}' is available for loan.")
+            if self.selected_patron_details is None:
+                print("No patron selected. Please select a patron first.")
+                return ConsoleState.PATRON_SEARCH
+
+            checkout = input("Would you like to check it out? (y/n): ").strip().lower()
+            if checkout in ("y", "yes"):
+                loan = self._loan_service.checkout_book(
+                    self.selected_patron_details,
+                    available_book_items[0]
+                )
+                print(
+                    f"Book '{book.title}' checked out successfully. "
+                    f"Due date: {loan.due_date}"
+                )
+        else:
+            book_item_ids = {item.id for item in book_items}
+            active_loans = [
+                loan for loan in self._json_data.loans
+                if loan.book_item_id in book_item_ids and loan.return_date is None
+            ]
+            next_due_date = min(loan.due_date for loan in active_loans)
+            print(
+                f"All copies of '{book.title}' are on loan. "
+                f"The return due date is {next_due_date}"
+            )
+
+        return ConsoleState.PATRON_DETAILS
 
     def loan_details(self) -> ConsoleState:
         loan = self.selected_loan_details
@@ -199,7 +270,6 @@ class ConsoleApp:
 
 from application_core.services.loan_service import LoanService
 from application_core.services.patron_service import PatronService
-from infrastructure.json_data import JsonData
 from infrastructure.json_loan_repository import JsonLoanRepository
 from infrastructure.json_patron_repository import JsonPatronRepository
 from console.console_app import ConsoleApp
@@ -213,6 +283,9 @@ def main():
 
     app = ConsoleApp(
         loan_service=loan_service,
-        patron_service=patron_service
+        patron_service=patron_service,
+        patron_repository=patron_repo,
+        loan_repository=loan_repo,
+        json_data=json_data
     )
     app.run()

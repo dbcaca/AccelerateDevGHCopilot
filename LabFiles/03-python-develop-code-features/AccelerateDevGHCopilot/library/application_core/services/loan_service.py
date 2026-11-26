@@ -2,6 +2,9 @@ from ..interfaces.iloan_service import ILoanService
 from ..interfaces.iloan_repository import ILoanRepository
 from ..enums.loan_return_status import LoanReturnStatus
 from ..enums.loan_extension_status import LoanExtensionStatus
+from ..entities.book_item import BookItem
+from ..entities.loan import Loan
+from ..entities.patron import Patron
 from datetime import datetime, timedelta
 
 class LoanService(ILoanService):
@@ -40,9 +43,12 @@ class LoanService(ILoanService):
         except Exception:
             return LoanExtensionStatus.ERROR
 
-    def checkout_book(self, patron, book_item, loan_id=None) -> None:
-        from ..entities.loan import Loan
-        from datetime import datetime, timedelta
+    def checkout_book(
+        self,
+        patron: Patron,
+        book_item: BookItem,
+        loan_id: int | None = None
+    ) -> Loan:
         # Generate a new loan ID if not provided
         if loan_id is None:
             all_loans = getattr(self._loan_repository, 'get_all_loans', lambda: [])()
